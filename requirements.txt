@@ -1,0 +1,17 @@
+# GUI and image processing
+Pillow>=7.2.0,<9.0.0  # Pillow 8.x generally supports Python 3.7, but 7.2 is more broadly compatible
+
+# Data handling and numerical processing
+numpy>=1.19.5,<1.22  # numpy 1.19.x versions are compatible with Python 3.7
+pandas>=1.0.5,<1.4  # Pandas starting from 1.0.5 supports Python 3.7 
+
+# Web browser, OS, and debugging (standard libraries - no installation needed for these)
+# webbrowser, os, sys, pdb (part of Python standard library)
+
+# Plotting
+matplotlib>=3.1.0,<3.5  # Matplotlib 3.1.x ensures that you are compatible with Python 3.7
+
+# scipy
+scipy==1.7.3 
+
+# Any changes to this list should be tested for compatibility
