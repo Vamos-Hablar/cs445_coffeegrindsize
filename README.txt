@@ -11,4 +11,4 @@ conda activate coffee_env
 # 3. Adding additional packages: if/when you pip install new packages for your work, be sure to update requirements.txt accordingly and include changes to the project_venv folder in your commit
 
 You can then just run the automated analysis version via
-python autoanalyzer.py
+python auto_analyzer.py
