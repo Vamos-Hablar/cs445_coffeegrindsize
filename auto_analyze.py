@@ -22,6 +22,8 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from scipy.spatial import ConvexHull
+import cv2
+import time
 
 
 
@@ -344,7 +346,7 @@ plt.ion()
 # define image paths for processing
 image_paths = [
     #'C:/Users/Andre/Documents/Decent_Example_Picture.png',
-    'C:/Users/Andre/Documents/Better_Example_Picture.png'
+    './Help/Better_Example_Picture.png'
 ]
 
 # load original images
@@ -358,12 +360,92 @@ processed_images = [preprocess_image(img) for img in original_images]
 plot_images(processed_images, [f"{path.split('/')[-1]} with preprocessing" for path in image_paths])
 
 
-### Section 3: Reference object (coin) detection scales (hardcoded for now)
-
-# define calibration scales
-pixel_lengths = [500]  # known pixel measurements
-physical_lengths = [23.81]  # corresponding physical measurements
-pixel_scales = [pl / phl for pl, phl in zip(pixel_lengths, physical_lengths)]
+### Section 3: Reference object (coin) detection scales
+coin_diameters={'us_penny':19.05,'us_nickel':21.21,'us_dime':17.91,'us_quarter':24.26,'us_half_dollar':30.61,'canadian_penny':19.05,'canadian_nickel':21.2,'canadian_dime':18.03,'canadian_quarter':23.88,'canadian_loonie':26.5}
+def detect_coin(image_pil,click_x,click_y):
+    img_array=np.array(image_pil)
+    img_bgr=cv2.cvtColor(img_array,cv2.COLOR_RGB2BGR)
+    gray=cv2.cvtColor(img_bgr,cv2.COLOR_BGR2GRAY)
+    blurred=cv2.GaussianBlur(gray,(9,9),2)
+    edges=cv2.Canny(blurred,30,100)
+    circles=cv2.HoughCircles(edges,cv2.HOUGH_GRADIENT,dp=1,minDist=100,param1=100,param2=20,minRadius=30,maxRadius=300)
+    if circles is not None:
+        circles=np.round(circles[0,:]).astype("int")
+        filtered_circles=[]
+        for(x,y,r)in circles:
+            dist=np.hypot(x-click_x,y-click_y)
+            if dist<50:
+                filtered_circles.append((x,y,r))
+        if not filtered_circles:
+            return None,None
+        filtered_circles=sorted(filtered_circles,key=lambda c:c[2],reverse=True)
+        x,y,r=filtered_circles[0]
+        diameter_pixels=2*r
+        return diameter_pixels,(x,y,r)
+    return None,None
+pixel_lengths=[]
+physical_lengths=[]
+pixel_scales=[]
+for img,path in zip(original_images,image_paths):
+    print(f"\nProcessing image: {path.split('/')[-1]}")
+    while True:
+        click_data=[None,None,False]
+        fig,ax=plt.subplots(figsize=(8,6))
+        ax.imshow(img)
+        ax.set_title("Click on the center of the coin (or press Enter to skip)")
+        ax.axis('off')
+        def onclick(event):
+            if event.xdata is not None and event.ydata is not None:
+                click_data[0]=int(event.xdata)
+                click_data[1]=int(event.ydata)
+                click_data[2]=True
+                plt.close(fig)
+        fig.canvas.mpl_connect('button_press_event',onclick)
+        plt.show()
+        timeout=30
+        start_time=time.time()
+        while not click_data[2]and time.time()-start_time<timeout:
+            plt.pause(0.1)
+        click_x,click_y,clicked=click_data
+        if not clicked or click_x is None or click_y is None:
+            print("No click detected. Skipping image.")
+            break
+        pixel_diameter,circle_params=detect_coin(img,click_x,click_y)
+        plt.figure(figsize=(8,6))
+        plt.imshow(img)
+        if circle_params is not None:
+            x,y,r=circle_params
+            circle=plt.Circle((x,y),r,color='red',fill=False,linewidth=2)
+            plt.gca().add_patch(circle)
+            plt.title(f"Detected Coin (Diameter: {pixel_diameter} pixels)")
+        else:
+            plt.title("No Coin Detected")
+            plt.close()
+            print("No coin detected. Skipping image.")
+            break
+        plt.axis('off')
+        plt.show(block=False)
+        plt.pause(0.1)
+        confirm=input("Is the coin properly highlighted? (y/n): ").strip().lower()
+        if confirm=='y':
+            break
+        print("Reprompting for click...")
+        plt.close()
+    if not clicked or click_x is None or click_y is None or circle_params is None or confirm!='y':
+        continue
+    while True:
+        print("Available coin types:",', '.join(coin_diameters.keys()))
+        coin_type=input("Enter the type of coin in the image (e.g., us_quarter): ").strip().lower()
+        if coin_type in coin_diameters:
+            break
+        print("Invalid coin type. Please try again.")
+    plt.close()
+    physical_diameter=coin_diameters[coin_type]
+    pixel_lengths.append(pixel_diameter)
+    physical_lengths.append(physical_diameter)
+    pixel_scales.append(pixel_diameter/physical_diameter)
+    print(f"Physical diameter ({coin_type}): {physical_diameter} mm")
+    print(f"Pixel scale: {pixel_diameter/physical_diameter} pixels/mm")
 
 # define fixed analysis region
 analysis_region = (1100, 500, 2500, 1200)
