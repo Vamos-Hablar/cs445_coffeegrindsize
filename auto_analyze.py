@@ -44,7 +44,7 @@ def plot_images(images, titles, figsize=(15, 5)):
         plt.subplot(1, len(images), i+1)
         plt.imshow(img)
         plt.title(title)
-        plt.axis('off')
+        #plt.axis('off')
     
     # adjust layout and display
     plt.tight_layout()
@@ -109,89 +109,66 @@ def threshold_image(img, analysis_region, threshold_percent=58.8):
     return cropped, mask, imdata, bg_median
 
 def quick_cluster(xlist, ylist, xstart, ystart):
-    '''
-    Performs rapid clustering using breadth-first search.
+    # initialize arrays for checking points
+    xcheck = np.array([xstart])
+    ycheck = np.array([ystart])
+    xlist_decay = np.copy(xlist)
+    ylist_decay = np.copy(ylist)
+    ilist_decay = np.arange(xlist.size)
     
-    Args:
-        xlist, ylist (np.array): Coordinates of points
-        xstart, ystart: Starting point coordinates
-    Returns:
-        np.array: Indices of points in cluster
-    '''
-    # get total number of points
-    N = xlist.size
+    # find and remove starting point from decay lists
+    istart = np.where((xlist_decay == xstart) & (ylist_decay == ystart))
+    if istart[0].size != 0:
+        xlist_decay = np.delete(xlist_decay, istart[0])
+        ylist_decay = np.delete(ylist_decay, istart[0])
+        ilist_decay = np.delete(ilist_decay, istart[0])
+    iout = istart[0]
     
-    # store original coordinates
-    X = xlist
-    Y = ylist
-    idx = np.arange(N)
-
-    # track unprocessed points
-    alive = np.ones(N, dtype=bool)
-
-    # find and validate start point
-    istart = np.where((X == xstart) & (Y == ystart))[0]
-    if istart.size == 0:
-        return np.array([], dtype=int)
-    
-    # mark start point as processed
-    alive[istart] = False
-    queue = [istart[0]]
-    output = [istart[0]]
-
-    # process queue until empty
-    while queue:
-        cur = queue.pop(0)
-
-        # get candidates from remaining alive points
-        candidates = idx[alive]
-        dx = np.abs(X[candidates] - X[cur])
-        dy = np.abs(Y[candidates] - Y[cur])
-
-        # find adjacent neighbors (manhattan distance <= 1)
-        neigh = candidates[(dx + dy) <= 1]
-        if neigh.size == 0:
+    # process points until no more neighbors found
+    for _ in range(xlist.size):
+        # find points within manhattan distance of 1
+        isel = np.where((np.abs(xlist_decay - xcheck[0]) + np.abs(ylist_decay - ycheck[0])) <= 1.001)
+        if isel[0].size == 0:
+            if xcheck.size == 1:
+                break
+            xcheck = np.delete(xcheck, 0)
+            ycheck = np.delete(ycheck, 0)
             continue
-
-        # update tracking arrays
-        alive[neigh] = False
-        output.extend(neigh.tolist())
-        queue.extend(neigh.tolist())
-
-    return np.array(output, dtype=int)
+            
+        # add found points to output and check lists
+        iout = np.append(iout, ilist_decay[isel[0]])
+        xcheck = np.append(xcheck, xlist_decay[isel[0]])
+        ycheck = np.append(ycheck, ylist_decay[isel[0]])
+        xcheck = np.delete(xcheck, 0)
+        ycheck = np.delete(ycheck, 0)
+        
+        # check if we've found all points
+        if isel[0].size == xlist_decay.size:
+            break
+            
+        # remove processed points from decay lists
+        xlist_decay = np.delete(xlist_decay, isel[0])
+        ylist_decay = np.delete(ylist_decay, isel[0])
+        ilist_decay = np.delete(ilist_decay, isel[0])
+    return iout
 
 def launch_psd(mask, imdata, bg_median,
                max_cluster_axis=100, min_surface=5,
                reference_threshold=0.4, maxcost=0.35, nsmooth=3):
-    '''
-    Performs Particle Size Distribution (PSD) analysis using connected component labeling
-    and path-based clustering.
-
-    Args:
-        mask (tuple): Binary mask coordinates (x_coords, y_coords)
-        imdata (np.ndarray): Original image data
-        bg_median (float): Background median intensity
-        max_cluster_axis (int): Maximum allowed cluster axis length
-        min_surface (int): Minimum allowed cluster surface area
-        reference_threshold (float): Threshold for reference point selection
-        maxcost (float): Maximum allowed path cost
-        nsmooth (int): Window size for path cost smoothing
-
-    Returns:
-        list: List of dictionaries containing cluster properties
-    '''
     # extract coordinates from mask
     X = mask[0].astype(int); Y = mask[1].astype(int)
     n = X.size
+
+    # Precompute imdata_mask to avoid repeated indexing
+    imdata_mask = imdata[mask]
 
     # initialize tracking arrays
     counted = np.zeros(n, bool)
     clusters = []
     cluster_count = 0  # add counter for progress tracking
 
-    #for each point
+    # for each point
     for _ in range(n):
-
         # find next unprocessed point
         open_idx = np.where(~counted)[0]
         if open_idx.size == 0: break
@@ -209,12 +186,12 @@ def launch_psd(mask, imdata, bg_median,
         qc = quick_cluster(X[close], Y[close], X[curr], Y[curr])
         iclust = close[qc]
 
-        #validate cluster size
+        # validate cluster size
         if iclust.size < min_surface:
             counted[curr] = True; continue
         
-        # calculate intensity-based costs
-        cost = np.maximum((imdata[mask][iclust] - imdata[mask][curr])**2 / bg_median**2, 0)
+        # calculate intensity-based costs using precomputed imdata_mask
+        cost = np.maximum((imdata_mask[iclust] - imdata_mask[curr])**2 / bg_median**2, 0)
         filt = np.array([np.where(iclust == curr)[0][0]], int)
         maxpath = np.full(iclust.size, np.nan)
 
@@ -222,11 +199,11 @@ def launch_psd(mask, imdata, bg_median,
         for ci in range(iclust.size):
             if iclust[ci] == curr: continue
             # calculate threshold and find dark points
-            vals = imdata[mask][iclust[filt]]
-            thr = (bg_median - imdata[mask][curr]) * reference_threshold + imdata[mask][curr]
+            vals = imdata_mask[iclust[filt]]
+            thr = (bg_median - imdata_mask[curr]) * reference_threshold + imdata_mask[curr]
             idark = np.where(vals <= thr)[0]
 
-                        # select best reference point
+            # select best reference point
             if idark.size == 0: continue
 
             # select best reference point
@@ -275,7 +252,6 @@ def launch_psd(mask, imdata, bg_median,
         xm, ym = xs.mean(), ys.mean()
         dlist = np.hypot(xs-xm, ys-ym)
         axis = dlist.max(); surf = filt.size
-        #print('append')
 
         # store cluster information
         clusters.append({
@@ -286,9 +262,9 @@ def launch_psd(mask, imdata, bg_median,
             'ymean': ym,
             'points': list(zip(xs, ys))
         })
-                # increment counter and print progress
+        # increment counter and print progress every 25 clusters
         cluster_count += 1
-        if cluster_count % 10 == 0:
+        if cluster_count % 50 == 0:
             print(f"{cluster_count} clusters identified")
 
     # print final count
@@ -302,7 +278,7 @@ def launch_psd(mask, imdata, bg_median,
 
 def plot_histograms(results, scales, names):
     '''
-    Creates histograms of particle measurements.
+    Creates histograms of particle measurements with error bars and average points.
     
     Args:
         results: List of ProcessingResults objects
@@ -312,25 +288,79 @@ def plot_histograms(results, scales, names):
     # process each result set
     for r, s, n in zip(results, scales, names):
         # calculate physical measurements
-        diams = [2*c['long_axis']/s for c in r.cluster_data]
-        surf = [c['surface']/(s**2) for c in r.cluster_data]
+        diams = np.array([2*np.sqrt(c['long_axis']*c['short_axis'])/s for c in r.cluster_data])
+        surf = np.array([c['surface']/(s**2) for c in r.cluster_data])
         
         # create figure
         plt.figure(figsize=(12, 5))
         
         # plot diameter distribution
         plt.subplot(1, 2, 1)
-        plt.hist(diams, bins=20, edgecolor='black')
+        # calculate histogram with weights
+        weights = np.ones_like(diams)/len(diams)
+        ypdf, xpdfleft, patches = plt.hist(diams, bins=20, weights=weights, 
+                                         color=(147/255, 36/255, 30/255), 
+                                         edgecolor='black', lw=2, rwidth=0.8,
+                                         zorder=1)  # Set histogram bars to lower zorder
+        
+        # calculate error bars
+        xpdf = xpdfleft[0:-1] + np.diff(xpdfleft)/2.0
+        poisson_pos = np.sqrt(ypdf)/len(diams)
+        poisson_neg = poisson_pos
+        
+        # plot error bars
+        plt.errorbar(xpdf, ypdf, yerr=[poisson_neg, poisson_pos], 
+                    marker=".", markersize=0, linestyle="", 
+                    color=(147/510, 36/510, 30/510), elinewidth=2, 
+                    capsize=0, alpha=0.8, zorder=3)  # Set error bars to higher zorder
+        
+        # calculate and plot average point
+        avg = np.average(diams, weights=weights)
+        ypos = np.max(ypdf)*0.05
+        plt.errorbar(avg, ypos, xerr=[[np.std(diams)], [np.std(diams)]], 
+                    marker="o", markersize=8, linestyle="", 
+                    color=(147/255, 36/255, 30/255), elinewidth=2,
+                    ecolor=(147/255, 36/255, 30/255, 0.3), 
+                    markeredgewidth=1.5, markeredgecolor="k",
+                    capsize=3, capthick=2, zorder=4)  # Set average point to highest zorder
+        
         plt.title(f"{n}\nDiameter Distribution (N={len(diams)})")
         plt.xlabel("Diameter (mm)")
-        plt.ylabel("Count")
+        plt.ylabel("Fraction of Particles")
         
         # plot surface area distribution
         plt.subplot(1, 2, 2)
-        plt.hist(surf, bins=20, edgecolor='black')
+        # calculate histogram with weights
+        weights = np.ones_like(surf)/len(surf)
+        ypdf, xpdfleft, patches = plt.hist(surf, bins=20, weights=weights,
+                                         color=(147/255, 36/255, 30/255),
+                                         edgecolor='black', lw=2, rwidth=0.8,
+                                         zorder=1)  # Set histogram bars to lower zorder
+        
+        # calculate error bars
+        xpdf = xpdfleft[0:-1] + np.diff(xpdfleft)/2.0
+        poisson_pos = np.sqrt(ypdf)/len(surf)
+        poisson_neg = poisson_pos
+        
+        # plot error bars
+        plt.errorbar(xpdf, ypdf, yerr=[poisson_neg, poisson_pos],
+                    marker=".", markersize=0, linestyle="",
+                    color=(147/510, 36/510, 30/510), elinewidth=2,
+                    capsize=0, alpha=0.8, zorder=15)  # Set error bars to higher zorder
+        
+        # calculate and plot average point
+        avg = np.average(surf, weights=weights)
+        ypos = np.max(ypdf)*0.05
+        plt.errorbar(avg, ypos, xerr=[[np.std(surf)], [np.std(surf)]],
+                    marker="o", markersize=8, linestyle="",
+                    color=(147/255, 36/255, 30/255), elinewidth=2,
+                    ecolor=(147/255, 36/255, 30/255, 0.3),
+                    markeredgewidth=1.5, markeredgecolor="k",
+                    capsize=3, capthick=2, zorder=16)  # Set average point to highest zorder
+        
         plt.title(f"{n}\nSurface Area Distribution")
         plt.xlabel("Surface Area (mm²)")
-        plt.ylabel("Count")
+        plt.ylabel("Fraction of Particles")
         
         # adjust and display plot
         plt.tight_layout()
@@ -344,9 +374,11 @@ def plot_histograms(results, scales, names):
 plt.ion()
 
 # define image paths for processing
+#images foundin 
 image_paths = [
-    #'C:/Users/Andre/Documents/Decent_Example_Picture.png',
-    './Help/Better_Example_Picture.png'
+    'Help/Decent_Example_Picture.png',
+    'Help/Better_Example_Picture.png',
+    #'Help/Bad_Example_Picture.png',
 ]
 
 # load original images
@@ -359,10 +391,14 @@ plot_images(original_images, [path.split('/')[-1] for path in image_paths])
 processed_images = [preprocess_image(img) for img in original_images]
 plot_images(processed_images, [f"{path.split('/')[-1]} with preprocessing" for path in image_paths])
 
+# Prompt user to continue
+input("\nPress Enter to proceed with coin detection...")
+plt.close('all')  # Close all preprocessed image displays
 
 ### Section 3: Reference object (coin) detection scales
 coin_diameters={'us_penny':19.05,'us_nickel':21.21,'us_dime':17.91,'us_quarter':24.26,'us_half_dollar':30.61,'canadian_penny':19.05,'canadian_nickel':21.2,'canadian_dime':18.03,'canadian_quarter':23.88,'canadian_loonie':26.5}
 def detect_coin(image_pil,click_x,click_y):
+    print('detecting coin...')
     img_array=np.array(image_pil)
     img_bgr=cv2.cvtColor(img_array,cv2.COLOR_RGB2BGR)
     gray=cv2.cvtColor(img_bgr,cv2.COLOR_BGR2GRAY)
@@ -386,78 +422,123 @@ def detect_coin(image_pil,click_x,click_y):
 pixel_lengths=[]
 physical_lengths=[]
 pixel_scales=[]
-for img,path in zip(original_images,image_paths):
+
+# Process each image individually
+for img, path in zip(original_images, image_paths):
     print(f"\nProcessing image: {path.split('/')[-1]}")
-    while True:
-        click_data=[None,None,False]
-        fig,ax=plt.subplots(figsize=(8,6))
+    print("Click on the center of the reference coin")
+    
+    # Reset click data for each image
+    click_data = [None, None, False]
+    coin_detected = False
+    
+    while not coin_detected:
+        plt.close('all')  # Close any existing figures
+        fig, ax = plt.subplots(figsize=(8,6))
         ax.imshow(img)
         ax.set_title("Click on the center of the coin (or press Enter to skip)")
         ax.axis('off')
+        
         def onclick(event):
             if event.xdata is not None and event.ydata is not None:
-                click_data[0]=int(event.xdata)
-                click_data[1]=int(event.ydata)
-                click_data[2]=True
-                plt.close(fig)
-        fig.canvas.mpl_connect('button_press_event',onclick)
-        plt.show()
-        timeout=30
-        start_time=time.time()
-        while not click_data[2]and time.time()-start_time<timeout:
-            plt.pause(0.1)
-        click_x,click_y,clicked=click_data
-        if not clicked or click_x is None or click_y is None:
-            print("No click detected. Skipping image.")
-            break
-        pixel_diameter,circle_params=detect_coin(img,click_x,click_y)
-        plt.figure(figsize=(8,6))
-        plt.imshow(img)
-        if circle_params is not None:
-            x,y,r=circle_params
-            circle=plt.Circle((x,y),r,color='red',fill=False,linewidth=2)
-            plt.gca().add_patch(circle)
-            plt.title(f"Detected Coin (Diameter: {pixel_diameter} pixels)")
-        else:
-            plt.title("No Coin Detected")
-            plt.close()
-            print("No coin detected. Skipping image.")
-            break
-        plt.axis('off')
+                click_data[0] = int(event.xdata)
+                click_data[1] = int(event.ydata)
+                click_data[2] = True
+                plt.close('all')
+        
+        # Connect the onclick event to the figure
+        fig.canvas.mpl_connect('button_press_event', onclick)
+        
+        # Show the figure and wait for the user to click
         plt.show(block=False)
-        plt.pause(0.1)
-        confirm=input("Is the coin properly highlighted? (y/n): ").strip().lower()
-        if confirm=='y':
+        
+        # Give user time to click (30 seconds timeout)
+        timeout = 30
+        start_time = time.time()
+        while not click_data[2] and time.time() - start_time < timeout:
+            plt.pause(0.1)
+        
+        # Ensure all figures are closed
+        plt.close('all')
+        
+        # Check if we got valid click data
+        if click_data[2]:  # If clicked
+            click_x, click_y = click_data[0], click_data[1]
+            print(f"Click detected at ({click_x}, {click_y})")
+            
+            # Detect coin and get parameters
+            pixel_diameter, circle_params = detect_coin(img, click_x, click_y)
+            
+            # Show detection result
+            plt.figure(figsize=(8,6))
+            plt.imshow(img)
+            if circle_params is not None:
+                x, y, r = circle_params
+                circle = plt.Circle((x,y), r, color='red', fill=False, linewidth=0.5)
+                plt.gca().add_patch(circle)
+                plt.title(f"Detected Coin (Diameter: {pixel_diameter} pixels)")
+            else:
+                plt.title("No Coin Detected")
+                plt.close()
+                print("No coin detected. Please try again.")
+                continue
+            
+            plt.axis('off')
+            plt.show(block=False)
+            plt.pause(0.1)
+            
+            confirm = input("Is the coin properly highlighted? (y/n): ").strip().lower()
+            if confirm == 'y':
+                coin_detected = True
+            else:
+                print("Reprompting for click...")
+                continue
+        else:
+            print("No click detected within timeout. Skipping image.")
             break
-        print("Reprompting for click...")
-        plt.close()
-    if not clicked or click_x is None or click_y is None or circle_params is None or confirm!='y':
+    
+    if not coin_detected:
+        print(f"Skipping image {path.split('/')[-1]} due to no valid coin detection")
         continue
+    
+    # Get coin type
     while True:
-        print("Available coin types:",', '.join(coin_diameters.keys()))
-        coin_type=input("Enter the type of coin in the image (e.g., us_quarter): ").strip().lower()
+        print("Available coin types:", ', '.join(coin_diameters.keys()))
+        coin_type = input("Enter the type of coin in the image (e.g., us_quarter): ").strip().lower()
         if coin_type in coin_diameters:
             break
         print("Invalid coin type. Please try again.")
-    plt.close()
-    physical_diameter=coin_diameters[coin_type]
+    
+    plt.close('all')
+    
+    # Calculate and store measurements
+    physical_diameter = coin_diameters[coin_type]
     pixel_lengths.append(pixel_diameter)
     physical_lengths.append(physical_diameter)
     pixel_scales.append(pixel_diameter/physical_diameter)
     print(f"Physical diameter ({coin_type}): {physical_diameter} mm")
     print(f"Pixel scale: {pixel_diameter/physical_diameter} pixels/mm")
 
-# define fixed analysis region
-analysis_region = (1100, 500, 2500, 1200)
+# define fixed analysis regions for each image
+analysis_regions = [
+    #(250, 250, 3000, 2500),  # region for Decent_Example_Picture.png
+    (250, 250, 1000, 1000),  # region for Better_Example_Picture.png
+    (1000, 250, 3500, 3000),  # region for Bad_Example_Picture.png
+    #(575, 300, 2000, 1000),  # smaller region for Bad_Example_Picture.png for speed purposes
+    #(575, 300, 3000, 2000),  # region for Bad_Example_Picture.png
+]
 all_results = []
 
 
 ### Section 4: Thresholding/Segmenting pipeline
 
 # process each image in the dataset
-for img in processed_images:
+for img, analysis_region, img_path in zip(processed_images, analysis_regions, image_paths):
+    # print current file being processed
+    print(f'\nProcessing {img_path.split("/")[-1]}...')
+    
     # apply thresholding and get masks
-    print('thhresholding...')
+    print('thresholding...')
     cropped, mask, imdata, bg_median = threshold_image(img, analysis_region)
     
     # detect particle clusters
@@ -493,17 +574,22 @@ for img in processed_images:
     for c in clusters:
         # extract cluster points
         x, y = zip(*c['points'])
+        x = np.array(x)
+        y = np.array(y)
         
-        # compute convex hull
-        hull = ConvexHull(np.column_stack((y, x)))
-        
-        # create polygon visualization
-        poly = patches.Polygon(hull.points[hull.vertices], 
-                             closed=True,
-                             fill=False, 
-                             edgecolor='red', 
-                             linewidth=0.5)
-        ax[2].add_patch(poly)
+        # compute convex hull with QJ option to handle collinear points
+        try:
+            hull = ConvexHull(np.column_stack((y, x)), qhull_options='QJ')
+            # create polygon visualization
+            poly = patches.Polygon(hull.points[hull.vertices], 
+                                 closed=True,
+                                 fill=False, 
+                                 edgecolor='red', 
+                                 linewidth=0.5)
+            ax[2].add_patch(poly)
+        except Exception as e:
+            print(f"Warning: Could not create hull for cluster with {len(x)} points: {str(e)}")
+            continue
     ax[2].set_title(f"Particles Detected: {len(clusters)}")
     
     # adjust and display plot
