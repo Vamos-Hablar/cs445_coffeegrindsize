@@ -23,8 +23,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from scipy.spatial import ConvexHull
 import cv2
-import time
 
+import time
 
 
 def plot_images(images, titles, figsize=(15, 5)):
@@ -60,7 +60,19 @@ def preprocess_image(img):
     Returns:
         PIL.Image: Processed image
     '''
-    return img  # currently no preprocessing
+    img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+    # denoised = cv2.fastNlMeansDenoisingColored(img_cv, None, h=10, hColor=10, templateWindowSize=7, searchWindowSize=21)
+    lab = cv2.cvtColor(img_cv, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    l_clahe = clahe.apply(l)
+
+    lab_clahe = cv2.merge((l_clahe, a, b))
+    res = cv2.cvtColor(lab_clahe, cv2.COLOR_LAB2BGR)
+
+    enhanced_pil = Image.fromarray(cv2.cvtColor(res, cv2.COLOR_BGR2RGB))
+    return enhanced_pil  
 
 class ProcessingResults:
     '''
@@ -151,6 +163,7 @@ def quick_cluster(xlist, ylist, xstart, ystart):
         ylist_decay = np.delete(ylist_decay, isel[0])
         ilist_decay = np.delete(ilist_decay, isel[0])
     return iout
+
 
 def launch_psd(mask, imdata, bg_median,
                max_cluster_axis=100, min_surface=5,
@@ -376,7 +389,7 @@ plt.ion()
 # define image paths for processing
 #images foundin 
 image_paths = [
-    'Help/Decent_Example_Picture.png',
+    # 'Help/Decent_Example_Picture.png',
     'Help/Better_Example_Picture.png',
     #'Help/Bad_Example_Picture.png',
 ]
@@ -474,6 +487,10 @@ for img, path in zip(original_images, image_paths):
             plt.imshow(img)
             if circle_params is not None:
                 x, y, r = circle_params
+                ##added a mask for the coin
+                coin_mask = np.zeros_like(np.array(img)[:, :, 0], dtype=np.uint8)
+                cv2.circle(coin_mask, (x, y), r + 10, 255, -1)
+
                 circle = plt.Circle((x,y), r, color='red', fill=False, linewidth=0.5)
                 plt.gca().add_patch(circle)
                 plt.title(f"Detected Coin (Diameter: {pixel_diameter} pixels)")
@@ -522,12 +539,51 @@ for img, path in zip(original_images, image_paths):
 # define fixed analysis regions for each image
 analysis_regions = [
     #(250, 250, 3000, 2500),  # region for Decent_Example_Picture.png
-    (250, 250, 1000, 1000),  # region for Better_Example_Picture.png
-    (1000, 250, 3500, 3000),  # region for Bad_Example_Picture.png
+    # (250, 250, 1000, 1000),  # region for Better_Example_Picture.png
+    (1100, 500, 2500, 1200), # smaller region for Better_Example_Picture.png
+    # (1000, 250, 3500, 3000),  # region for Bad_Example_Picture.png
     #(575, 300, 2000, 1000),  # smaller region for Bad_Example_Picture.png for speed purposes
     #(575, 300, 3000, 2000),  # region for Bad_Example_Picture.png
 ]
 all_results = []
+
+
+#####
+
+### Section 4.5: Breaking up of overlapping particles that were identified (watershed algorithm, etc)
+# may make more sense to have this directly within section 4 functions above depending on workflow
+
+def watershed_alg(img, mask=None):
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    #Otsu's binarization for mask
+    if mask is None:
+        ret, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    else:
+        thresh = mask
+
+    kernel = np.ones((3, 3), np.uint8)
+    opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
+
+    sure_bg = cv2.dilate(opening, kernel, iterations=3)
+    dist_t = cv2.distanceTransform(opening,cv2.DIST_L2,5)
+    ret, sure_fg = cv2.threshold(dist_t, 0.5 * dist_t.max(),255,0)
+
+    sure_fg = np.uint8(sure_fg)
+    unknown = cv2.subtract(sure_bg,sure_fg)
+
+    ret, markers = cv2.connectedComponents(sure_fg)
+    markers = markers+1
+    markers[unknown==255] = 0
+
+    color_img = img.copy()
+    cv2.watershed(color_img, markers)
+    particle_mask = np.where(markers > 1)
+    markers[markers == -1] = 0
+
+    return particle_mask, markers
 
 
 ### Section 4: Thresholding/Segmenting pipeline
@@ -540,11 +596,81 @@ for img, analysis_region, img_path in zip(processed_images, analysis_regions, im
     # apply thresholding and get masks
     print('thresholding...')
     cropped, mask, imdata, bg_median = threshold_image(img, analysis_region)
+
+    binary_mask = np.zeros_like(imdata, dtype=np.uint8)
+    binary_mask[mask] = 255
+
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary_mask)
+    clump_labels = [i for i, stat in enumerate(stats) if stat[cv2.CC_STAT_AREA] > 150 and i != 0]
+    clump_mask = np.isin(labels, clump_labels).astype(np.uint8) * 255
+
+    #exclude coin for analysis
+    x1, y1, x2, y2 = analysis_region
+    cropped_mask = coin_mask[y1:y2, x1:x2]  # match the cropped region
+    binary_mask[cropped_mask > 0] = 0
+    clump_mask[cropped_mask > 0] = 0
+
+    print('applying watershed...')
+    # Convert PIL to OpenCV image (cropped is PIL.Image)
+    cropped_cv = cv2.cvtColor(np.array(cropped), cv2.COLOR_RGB2BGR)
+    particle_mask, markers = watershed_alg(cropped_cv, clump_mask)
+
+    # Merge results: keep fine particles + split clumps
+    final_mask = binary_mask.copy()
+    final_mask[clump_mask > 0] = 0  #remove clump blobs
+    final_mask[particle_mask] = 255
+    particle_mask_final = np.where(final_mask > 0)
+
+    #visualize watershed segmentation
+    plt.imshow(markers, cmap='nipy_spectral')
+    plt.title("Watershed Segmentation")
+    plt.axis('off')
+    plt.show(block=False)
+    plt.pause(0.1)
     
     # detect particle clusters
     print('identifying particles...')
-    clusters = launch_psd(mask, imdata, bg_median)
-    
+    clusters = launch_psd(particle_mask_final, imdata, bg_median)
+
+    #second-pass
+    print("Running second pass for smaller particle detection...")
+    cluster_mask = np.zeros_like(imdata, dtype=np.uint8)
+    for c in clusters:
+        for x, y in c['points']:
+            x = int(np.clip(x, 0, cluster_mask.shape[1] - 1))
+            y = int(np.clip(y, 0, cluster_mask.shape[0] - 1))
+            cluster_mask[y, x] = 255
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    dilated_mask = cv2.dilate(cluster_mask, kernel, iterations=1)
+
+    bg_val = int(np.median(imdata[cluster_mask == 0]))
+    residual_imdata = imdata.copy()
+    residual_imdata[dilated_mask > 0] = bg_val
+
+    residual_thresh = np.where(residual_imdata < bg_val * 0.588)  #match threshold percent
+
+    residual_clusters = launch_psd(residual_thresh, residual_imdata, bg_median)
+
+    #remove any overlapping clusters
+    def cluster_overlap(c1, c2):
+        for pt in c1['points']:
+            if pt in c2['points']:
+                return True
+        return False
+
+    non_overlap_res = []
+    for rc in residual_clusters:
+        overlaps = False
+        for c1 in clusters:
+            if cluster_overlap(rc, c1):
+                overlaps = True
+                break
+
+        if not overlaps:
+            non_overlap_res.append(rc)
+    clusters += non_overlap_res
+
     # store analysis results
     res = ProcessingResults()
     res.mask_threshold = mask
@@ -565,7 +691,7 @@ for img, analysis_region, img_path in zip(processed_images, analysis_regions, im
     # create and plot threshold overlay
     overlay = cropped.convert('RGB')
     arr = np.array(overlay)
-    arr[mask] = [255, 0, 0]  # mark detected particles in red
+    arr[particle_mask] = [255, 0, 0]  # mark detected particles in red
     ax[1].imshow(arr)
     ax[1].set_title("Threshold Result")
     
@@ -596,10 +722,6 @@ for img, analysis_region, img_path in zip(processed_images, analysis_regions, im
     plt.tight_layout()
     plt.show(block=False)
     plt.pause(0.1)
-
-
-### Section 4.5: Breaking up of overlapping particles that were identified (watershed algorithm, etc)
-# may make more sense to have this directly within section 4 functions above depending on workflow
 
 
 ### Section 5: Analysis - basic histograms shown for now. 
