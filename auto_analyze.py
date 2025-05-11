@@ -846,8 +846,7 @@ def plot_histograms_comparison(results_basic, results_enhanced, results_mser, sc
 plt.ion()
 
 # Configuration flags
-SKIP_COIN = True  # flag for skipping coin detection
-NEW_THRESHOLD = True  # flag for using MSER instead of original thresholding
+SKIP_COIN = False  # flag for skipping coin detection
 
 # define image paths for processing
 #images foundin 
