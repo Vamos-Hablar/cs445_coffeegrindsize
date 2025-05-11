@@ -24,13 +24,23 @@ import matplotlib.patches as patches
 from scipy.spatial import ConvexHull
 import cv2
 import time
+import sys
+import os
 
 # Add toolbar for zoom and pan
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
 import tkinter as tk
 
+# Redirect stderr to devnull to suppress Tkinter errors
+class SuppressTkinterErrors:
+    def __enter__(self):
+        self.stderr = sys.stderr
+        sys.stderr = open(os.devnull, 'w')
+        return self
 
+    def __exit__(self, *args):
+        sys.stderr = self.stderr
 
 def plot_images(original_images, processed_images, original_titles, processed_titles, figsize=(15, 10)):
     '''
@@ -574,28 +584,59 @@ def detect_particles_mser(img, analysis_region):
     
     return clusters
 
-def detect_coin(image_pil,click_x,click_y):
+def detect_coin(image_pil, click_x, click_y):
     print('detecting coin...')
-    img_array=np.array(image_pil)
-    img_bgr=cv2.cvtColor(img_array,cv2.COLOR_RGB2BGR)
-    gray=cv2.cvtColor(img_bgr,cv2.COLOR_BGR2GRAY)
-    blurred=cv2.GaussianBlur(gray,(9,9),2)
-    edges=cv2.Canny(blurred,30,100)
-    circles=cv2.HoughCircles(edges,cv2.HOUGH_GRADIENT,dp=1,minDist=100,param1=100,param2=20,minRadius=30,maxRadius=300)
+    img_array = np.array(image_pil)
+    height, width = img_array.shape[:2]
+    
+    # Define the region of interest (ROI) around the click point
+    roi_size = 220
+    
+    # Calculate ROI boundaries, ensuring they stay within image bounds
+    x1 = max(0, int(click_x - roi_size))
+    y1 = max(0, int(click_y - roi_size))
+    x2 = min(width, int(click_x + roi_size))
+    y2 = min(height, int(click_y + roi_size))
+    
+    # Extract ROI
+    roi = img_array[y1:y2, x1:x2]
+    
+    # Process ROI
+    img_bgr = cv2.cvtColor(roi, cv2.COLOR_RGB2BGR)
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (9,9), 2)
+    edges = cv2.Canny(blurred, 30, 100)
+    
+    # Run Hough transform on ROI
+    circles = cv2.HoughCircles(edges, cv2.HOUGH_GRADIENT, dp=1, minDist=100,
+                              param1=100, param2=20, minRadius=30, maxRadius=200)
+    
     if circles is not None:
-        circles=np.round(circles[0,:]).astype("int")
-        filtered_circles=[]
-        for(x,y,r)in circles:
-            dist=np.hypot(x-click_x,y-click_y)
-            if dist<50:
-                filtered_circles.append((x,y,r))
+        circles = np.round(circles[0,:]).astype("int")
+        filtered_circles = []
+        
+        # Translate click coordinates to ROI coordinates
+        roi_click_x = click_x - x1
+        roi_click_y = click_y - y1
+        
+        for (x, y, r) in circles:
+            # Check distance in ROI coordinates
+            dist = np.hypot(x - roi_click_x, y - roi_click_y)
+            if dist < 50:
+                # Translate circle coordinates back to original image coordinates
+                x_orig = x + x1
+                y_orig = y + y1
+                filtered_circles.append((x_orig, y_orig, r))
+        
         if not filtered_circles:
-            return None,None
-        filtered_circles=sorted(filtered_circles,key=lambda c:c[2],reverse=True)
-        x,y,r=filtered_circles[0]
-        diameter_pixels=2*r
-        return diameter_pixels,(x,y,r)
-    return None,None
+            return None, None
+            
+        filtered_circles = sorted(filtered_circles, key=lambda c: c[2], reverse=True)
+        x, y, r = filtered_circles[0]
+        diameter_pixels = 2 * r
+        return diameter_pixels, (x, y, r)
+    
+    return None, None
 
 def cluster_overlap(c1, c2):
     """
@@ -917,8 +958,9 @@ else:
             plt.axis('off')
             
             # Get click data
-            click_data = plt.ginput(1, timeout=30)
-            plt.close()
+            with SuppressTkinterErrors():
+                click_data = plt.ginput(1, timeout=30)
+                plt.close(plt.gcf())
             
             # Check if we got valid click data
             if click_data:  # If clicked (ginput returns a list of tuples)
@@ -929,33 +971,36 @@ else:
                 pixel_diameter, circle_params = detect_coin(img, click_x, click_y)
                 
                 # Show detection result
-                plt.figure(figsize=(8,6))
-                plt.imshow(img)
-                if circle_params is not None:
-                    x, y, r = circle_params
-                    circle = plt.Circle((x,y), r, color='red', fill=False, linewidth=0.5)
-                    plt.gca().add_patch(circle)
-                    plt.title(f"Detected Coin (Diameter: {pixel_diameter} pixels)")
-                else:
-                    plt.title("No Coin Detected")
-                    plt.close()
-                    print("No coin detected. Please try again.")
-                    continue
+                with SuppressTkinterErrors():
+                    plt.figure(figsize=(8,6))
+                    plt.imshow(img)
+                    if circle_params is not None:
+                        x, y, r = circle_params
+                        circle = plt.Circle((x,y), r, color='red', fill=False, linewidth=0.5)
+                        plt.gca().add_patch(circle)
+                        plt.title(f"Detected Coin (Diameter: {pixel_diameter} pixels)")
+                    else:
+                        plt.title("No Coin Detected")
+                        plt.close(plt.gcf())
+                        print("No coin detected. Please try again.")
+                        continue
+                    
+                    plt.axis('off')
+                    plt.show(block=False)
+                    plt.pause(0.1)
                 
-                plt.axis('off')
-                # plt.show(block=False)
-                # plt.pause(0.1)
-                
+                # Get confirmation before closing the window
                 confirm = input("Is the coin properly highlighted? (y/n): ").strip().lower()
+                
+                # Close the current figure without using close('all')
+                with SuppressTkinterErrors():
+                    plt.close(plt.gcf())
+                
                 if confirm == 'y':
                     coin_detected = True
                 else:
                     print("Reprompting for click...")
-                    plt.close('all')  # Close all figures before reprompting
                     continue
-            else:
-                print("No click detected within timeout. Skipping image.")
-                break
         
         if not coin_detected:
             print(f"Skipping image {path.split('/')[-1]} due to no valid coin detection")
