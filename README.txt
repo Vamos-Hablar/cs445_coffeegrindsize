@@ -7,11 +7,12 @@ To set up your environment, I suggest the following:
 # 2. update director to project folder
 >cd cs445_coffeegrindsize
 
-# 3. Activate venv
->.\project_venv\Scripts\activate
+>>>(DISREGARD VENV INSTRUCTIONS, THIS WAS NOT PORTABLE TO DIFFERENT MACHINES)<<<
+# 3. from your cloned repo folder, pip install the requirements.txt folder to your new conda environment 
+ .\cs445_coffeegrindsize> pip install -r requirements.txt
+
 
 # 4. Running the project
 >python auto_analyze.py
 
 # 5. Adding additional packages: if/when you pip install new packages to the venv for your work, be sure to update requirements.txt accordingly and include changes to the project_venv folder in your commit
-
