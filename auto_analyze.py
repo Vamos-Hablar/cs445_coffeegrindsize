@@ -26,6 +26,7 @@ import cv2
 import time
 import sys
 import os
+from particle_analysis import analyze_particle_shapes, compute_shape_score, count_fines
 
 # Add toolbar for zoom and pan
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -1045,6 +1046,16 @@ for img, analysis_region, img_path in zip(processed_images, analysis_regions, im
     start_time = time.time()
     cropped, mask, imdata, bg_median = threshold_image(img, analysis_region)
     clusters_original_basic = launch_psd(mask, imdata, bg_median)
+
+    # Convert mask to labeled image for regionprops
+    binary_mask = np.zeros_like(imdata, dtype=np.uint8)
+    binary_mask[mask] = 255
+
+    shape_data_basic = analyze_particle_shapes(binary_mask)
+    shape_scores_basic = compute_shape_score(shape_data_basic)
+    num_fines_basic = count_fines(shape_data_basic, area_threshold=50)
+    print(f"[Basic] Avg Shape Score: {np.mean(shape_scores_basic):.2f}, Fines Count: {num_fines_basic}")
+
     end_time = time.time()
     print(f"Basic original method completed in {end_time - start_time:.2f} seconds")
     
@@ -1130,6 +1141,21 @@ for img, analysis_region, img_path in zip(processed_images, analysis_regions, im
     
     # Combine first and second pass results
     clusters_original_enhanced += non_overlap_res
+
+    # Create a binary mask from the final particle list
+    mask_enh = np.zeros_like(imdata, dtype=np.uint8)
+    for c in clusters_original_enhanced:
+        for x, y in c['points']:
+            x = int(np.clip(x, 0, mask_enh.shape[1]-1))
+            y = int(np.clip(y, 0, mask_enh.shape[0]-1))
+            mask_enh[y, x] = 255
+
+    shape_data_enh = analyze_particle_shapes(mask_enh)
+    shape_scores_enh = compute_shape_score(shape_data_enh)
+    num_fines_enh = count_fines(shape_data_enh, area_threshold=50)
+
+    print(f"[Enhanced] Avg Shape Score: {np.mean(shape_scores_enh):.2f}, Fines Count: {num_fines_enh}")
+
     end_time = time.time()
     print(f"Enhanced original method completed in {end_time - start_time:.2f} seconds")
     
@@ -1149,6 +1175,21 @@ for img, analysis_region, img_path in zip(processed_images, analysis_regions, im
     print('_'*50)
     start_time = time.time()
     clusters_mser = detect_particles_mser(img, analysis_region)
+
+    # Build binary mask from MSER cluster points
+    mask_mser = np.zeros((img.size[1], img.size[0]), dtype=np.uint8)
+    for c in clusters_mser:
+        for x, y in c['points']:
+            x = int(np.clip(x, 0, mask_mser.shape[1]-1))
+            y = int(np.clip(y, 0, mask_mser.shape[0]-1))
+            mask_mser[y, x] = 255
+
+    shape_data_mser = analyze_particle_shapes(mask_mser)
+    shape_scores_mser = compute_shape_score(shape_data_mser)
+    num_fines_mser = count_fines(shape_data_mser, area_threshold=50)
+
+    print(f"[MSER] Avg Shape Score: {np.mean(shape_scores_mser):.2f}, Fines Count: {num_fines_mser}")
+
     end_time = time.time()
     print(f"MSER method completed in {end_time - start_time:.2f} seconds")
     
