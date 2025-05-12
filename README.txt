@@ -1,4 +1,4 @@
-https://github.com/Vamos-Hablar/cs445_coffeegrindsize/tree/master
+https://github.com/Vamos-Hablar/cs445_coffeegrindsize.git
 
 To set up your environment, I suggest the following:
 
