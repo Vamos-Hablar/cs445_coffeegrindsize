@@ -1,3 +1,5 @@
+https://github.com/Vamos-Hablar/cs445_coffeegrindsize/tree/master
+
 To set up your environment, I suggest the following:
 
 # 1. (assuming you have conda installed) Create fresh Conda environment with the appropriate python version
